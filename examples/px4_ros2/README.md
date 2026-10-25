@@ -8,7 +8,9 @@ ROS 2 (tested with ROS 2 Jazzy / Python 3.12 and the v0.1.7 release).
 | `run_carlaair.sh` | Start the packaged CarlaAir with a given AirSim `settings.json` |
 | `px4/make_px4_rootfs.sh` | Build a PX4 `etc` overlay that works with AirSim's HIL link |
 | `px4/22180_airsim_quad` | PX4 airframe for AirSim's quadrotor |
-| `px4_sensor_bridge.py` | ROS 2 node: `/clock`, IMU, images, ground truth |
+| `px4_sensor_bridge.py` | ROS 2 node: `/clock`, IMU, ground truth (and AirSim images) |
+| `carla_sensor_feed.py` | CARLA sensors on the drone actor; streams their data (needs CarlaAir's `carla`, Python 3.10) |
+| `carla_sensor_bridge.py` | ROS 2 node: CARLA cameras, lidar, radar in AirSim time, /tf_static |
 | `airsim_rpc.py` | Minimal AirSim msgpack-RPC client (the `airsim` pip package does not run on Python 3.12) |
 | `focus_guard.py` | Keeps keyboard focus off the CarlaAir window (view-only window) |
 | `config/example_*` | Example AirSim settings and bridge configuration |
@@ -54,10 +56,26 @@ Requires `python3-msgpack`, `python3-numpy` and `python3-yaml`.
 - **Camera FOV.** `CaptureSettings.FOV_Degrees` is not applied; the bridge sets
   it with `simSetCameraFov` (`cameras.fov`).
 - **Image latency.** AirSim stamps images when it returns them, about 76 ms
-  after rendering at 960x600 on an RTX 5090. Set `cameras.latency_ms`; measure
+  after rendering at 960x600 on an RTX 3090. Set `cameras.latency_ms`; measure
   it by fitting the image rotation rate (homographies) against the gyro.
 - **Clock.** Lockstep runs at `ClockSpeed` 1.0; `simContinueForTime` hangs
   with a PX4 vehicle.
+- **CARLA sensors on the drone.** CarlaAir registers the AirSim drone as the
+  CARLA actor `airsim.drone`; CARLA sensors attached to it render every frame
+  (AirSim's simGetImages waits about one engine frame per capture, ~6 Hz for a
+  stereo + depth rig), and CARLA's lidar does not slow the lockstep physics
+  (AirSim lidars do: 0.58x real time with a 96-channel one). CARLA stamps in
+  game time, which drifts against AirSim's clock; `carla_sensor_bridge.py`
+  fits the offset with the rendered drone poses against AirSim's trajectory.
+  AirSim's ground-truth position has a different origin than CARLA's and jumps
+  when the vehicle first moves; the fit removes a constant translation.
+- **CARLA radar velocity.** The radar derives its own velocity from the
+  position change per frame; with a `sensor_tick` larger than a frame its
+  Doppler velocities come out too large. Run it every frame.
+- **Python.** CarlaAir's `carla` module is built for Python 3.10; the PyPI
+  `carla` 0.9.16 crashes against CarlaAir's server.
+- **Window size.** The engine renders its window at full size every frame;
+  `run_carlaair.sh --screen-percentage` lowers that cost.
 - **Spawn position.** Vehicle `X/Y/Z` are NED metres from the map's
   PlayerStart. In Town10HD, `airsim = carla + (172.20, -183.86)` and
   `airsim_z = -carla_z + 27.45` (see `COORDINATE_SYSTEMS.md`).

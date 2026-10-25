@@ -3,7 +3,8 @@
 # settings file.
 #
 # Usage: run_carlaair.sh --settings FILE [--release DIR] [--state-dir DIR]
-#                        [--map MAP] [--res WxH] [--quality LEVEL] [--offscreen]
+#                        [--map MAP] [--res WxH] [--quality LEVEL]
+#                        [--screen-percentage N] [--offscreen]
 #
 #   --settings   AirSim settings.json to use (required)
 #   --release    unpacked CarlaAir release (default: $CARLAAIR_RELEASE or
@@ -12,6 +13,11 @@
 #   --map        CARLA map (default: Town10HD)
 #   --res        window size (default: 960x540)
 #   --quality    Low, Medium, High or Epic (default: Low)
+#   --screen-percentage N
+#                render the window at N % of its size (default: 100). The
+#                window is rendered every frame at its full size, so a large
+#                or maximised window slows the API cameras; they render to
+#                their own targets and are not affected by this setting.
 #   --offscreen  render without a window. CarlaAir starts its own drone control
 #                on the first WASD/Space/Shift key in its window; with a PX4
 #                vehicle that fights PX4's flight modes and can abort the engine.
@@ -28,6 +34,7 @@ state_dir=""
 map="Town10HD"
 resolution="960x540"
 quality="Low"
+screen_percentage=100
 offscreen=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,8 +44,9 @@ while [[ $# -gt 0 ]]; do
     --map) map="$2"; shift 2 ;;
     --res) resolution="$2"; shift 2 ;;
     --quality) quality="$2"; shift 2 ;;
+    --screen-percentage) screen_percentage="$2"; shift 2 ;;
     --offscreen) offscreen=1; shift ;;
-    -h|--help) sed -n '2,22p' "$0" | cut -c3-; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0" | cut -c3-; exit 0 ;;
     *) echo "ERROR: unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -65,6 +73,10 @@ FullscreenMode=1
 LastConfirmedFullscreenMode=1
 FrameRateLimit=60.000000
 Version=5
+INI
+cat >"$(dirname -- "${runtime_ini}")/Engine.ini" <<INI
+[SystemSettings]
+r.ScreenPercentage=${screen_percentage}
 INI
 
 icd_files="$(ls /usr/share/vulkan/icd.d/*.json /etc/vulkan/icd.d/*.json 2>/dev/null | paste -sd: || true)"

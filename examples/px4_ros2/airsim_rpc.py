@@ -28,7 +28,10 @@ class AirSimRpc:
     def __init__(self, host: str = "127.0.0.1", port: int = 41451, timeout: float = 10.0):
         self._socket = socket.create_connection((host, port), timeout=timeout)
         self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self._unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+        try:
+            self._unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+        except TypeError:  # msgpack < 0.6.1 has no strict_map_key and accepts any key
+            self._unpacker = msgpack.Unpacker(raw=False)
         self._message_id = 0
 
     def call(self, method: str, *params):
