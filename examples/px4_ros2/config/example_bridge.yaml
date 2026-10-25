@@ -1,0 +1,29 @@
+# px4_sensor_bridge.py configuration for config/example_settings.json.
+airsim:
+  host: 127.0.0.1
+  port: 41451
+  vehicle: drone          # vehicle name in settings.json
+namespace: drone          # prefix of all relative topics below
+publish_clock: true       # /clock from AirSim time; use use_sim_time:=true
+
+# Each entry publishes AirSim's body IMU (FRD) rotated into another frame.
+imu:
+  - topic: imu
+    frame_id: base_link   # FLU body frame
+    rotation_from_body_frd: [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
+
+cameras:
+  max_rate_hz: 0          # 0: capture as fast as CarlaAir renders
+  fov:                    # horizontal FOV per camera, set through the API
+    front: {fov_deg: 90.0}
+  streams:
+    - {camera: front, image: scene, encoding: rgb8,
+       image_topic: front/image_raw, info_topic: front/camera_info, frame_id: front_optical}
+    - {camera: front, image: depth_planar, encoding: 32FC1, max_depth_m: 50.0,
+       image_topic: front/depth, info_topic: front/depth/camera_info, frame_id: front_optical}
+
+ground_truth:
+  topic: ground_truth/odom
+  world_frame: world      # ENU
+  body_frame: base_link   # FLU
+  rate_hz: 50

@@ -1,0 +1,34 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Multirotor",
+  "ClockType": "SteppableClock",
+  "OriginGeopoint": {"Latitude": 47.641468, "Longitude": -122.140165, "Altitude": 122},
+  "Vehicles": {
+    "drone": {
+      "VehicleType": "PX4Multirotor",
+      "UseSerial": false,
+      "UseTcp": true,
+      "TcpPort": 4560,
+      "LockStep": true,
+      "ControlIp": "127.0.0.1",
+      "ControlPortLocal": 14541,
+      "ControlPortRemote": 14581,
+      "LocalHostIp": "127.0.0.1",
+      "Sensors": {
+        "Barometer": {"SensorType": 1, "Enabled": true, "PressureFactorSigma": 0.0001825},
+        "Imu": {"SensorType": 2, "Enabled": true},
+        "Gps": {"SensorType": 3, "Enabled": true},
+        "Magnetometer": {"SensorType": 4, "Enabled": true}
+      },
+      "Cameras": {
+        "front": {
+          "CaptureSettings": [
+            {"ImageType": 0, "Width": 640, "Height": 480},
+            {"ImageType": 1, "Width": 640, "Height": 480}
+          ],
+          "X": 0.35, "Y": 0.0, "Z": 0.0, "Pitch": 0.0, "Roll": 0.0, "Yaw": 0.0
+        }
+      }
+    }
+  }
+}

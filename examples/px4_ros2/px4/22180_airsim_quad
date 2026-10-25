@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# @name CarlaAir / AirSim quadrotor (PX4 SITL over simulator_mavlink)
+#
+# AirSim simulates its own generic quadrotor, whose geometry matches iris.
+# Use with a rootfs made by make_px4_rootfs.sh, which also keeps PX4's
+# single-IMU estimator setup (AirSim provides one IMU).
+
+. ${R}etc/init.d-posix/airframes/10016_none_iris
+
+# AirSim sends no battery status; without this PX4 refuses to arm
+# ("Preflight Fail: system power unavailable").
+param set CBRK_SUPPLY_CHK 894281
