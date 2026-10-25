@@ -23,7 +23,11 @@ Build on Ubuntu 24.04 (everything under `~/workspace_sim/carlaair_src`):
    from carla-assets.s3.us-east-005.backblazeb2.com) into `Unreal/CarlaUE4/Content/Carla`, and UE's
    `Samples/StarterContent/Content/StarterContent` into `Unreal/CarlaUE4/Content/StarterContent`
    (P_Fire, P_Smoke; cooked via `Config/DefaultGame.ini`).
-6. Package in the 22.04 container: `make package ARGS="--config=Shipping --no-zip"`.
+6. CARLA's camera post-processing materials (git-ignored in this fork, missing them crashes the
+   engine when a CARLA camera spawns): copy `Unreal/CarlaUE4/Plugins/Carla/Content/PostProcessingMaterials`
+   from carla-simulator/carla tag 0.9.16 (sparse checkout).
+7. `Docs/` must exist (Package.sh copies it into the package; this fork has none).
+8. Package in the 22.04 container: `make package ARGS="--config=Shipping --no-zip"`.
 
 Run the docker steps as the user with the tree mounted at the same path, `HOME` inside the tree
 and `UE4_ROOT` pointing at the engine.
