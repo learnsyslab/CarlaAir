@@ -23,6 +23,7 @@
 #include "Carla/Actor/CarlaActorFactoryBlueprint.h"
 #include "Carla/Sensor/SensorFactory.h"
 #include "Carla/Actor/StaticMeshFactory.h"
+#include "Carla/Actor/ParticleEffectFactory.h"
 #include "Carla/Trigger/TriggerFactory.h"
 #include "Carla/Actor/UtilActorFactory.h"
 #include "Carla/AI/AIControllerFactory.h"
@@ -242,6 +243,7 @@ ASimWorldGameMode::ASimWorldGameMode(const FObjectInitializer& ObjectInitializer
     // Actor Factories — C++ factories
     ActorFactories.Add(ASensorFactory::StaticClass());
     ActorFactories.Add(AStaticMeshFactory::StaticClass());
+    ActorFactories.Add(AParticleEffectFactory::StaticClass());  // SOS-Nav: fire, smoke
     ActorFactories.Add(ATriggerFactory::StaticClass());
     ActorFactories.Add(AUtilActorFactory::StaticClass());
     ActorFactories.Add(AAIControllerFactory::StaticClass());
