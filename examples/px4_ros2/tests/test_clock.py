@@ -100,3 +100,25 @@ def test_hover_follows_the_wall_clock():
     truth = DELTA + int(airsim_rate * wall * 1e9)
     assert abs(stamp - truth) < 1_000_000, (stamp - truth) / 1e6
     assert clock.stats["wall_tracked"] > 0
+
+
+def test_confirmed_step_is_taken_at_once():
+    clock = make()
+    feed(clock, 0.0, 3.0)
+    clock.delta, clock.fitted = DELTA + 150_000_000, True  # the clocks jumped by 0.15 s
+    clock._fit()  # first fit: clamped
+    assert clock.stats["clamped"] == 1
+    clock._fit()  # second fit agrees: step
+    assert clock.stats["stepped"] == 1 and abs(clock.delta - DELTA) < 2_000_000
+
+
+def test_frame_never_newer_than_airsim_now():
+    clock = make()
+    feed(clock, 0.0, 3.0)
+    clock.next_fit = math.inf
+    now_ns = time.time_ns()
+    clock.trajectory.samples.append((DELTA + 6_000_000_000, np.zeros(3), np.eye(3), now_ns))
+    clock.delta, clock.fitted = DELTA + 2_000_000_000, True  # 2 s ahead of AirSim
+    stamp = clock.airsim_time(5.9, pose(5.9), np.eye(3))
+    assert clock.stats["future_capped"] == 1
+    assert stamp <= DELTA + 6_000_000_000 + (time.time_ns() - now_ns)

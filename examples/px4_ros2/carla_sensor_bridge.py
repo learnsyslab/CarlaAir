@@ -181,15 +181,21 @@ class Clock:
     minutes. A hover of a few minutes otherwise left the image stamps 0.2-0.4 s
     off, and the VIO lost tracking at the next turn.
 
-    Robustness: once fitted, one fit moves delta by at most MAX_STEP_NS (the
-    clocks drift by milliseconds per minute; a degenerate fit during fast
-    flight once moved it by 0.45 s in a minute). If no ground truth lies in the
+    Robustness: once fitted, one fit moves delta by at most MAX_STEP_NS unless
+    the next fit confirms the step: the clocks do jump (AirSim's lockstep clock
+    fell 2 s behind game time within a minute when the XR session started and
+    the drone flew; slewing at 20 ms per fit left the images up to 2 s off and
+    the VIO died). A frame is never stamped later than AirSim's clock now
+    (newest ground truth plus the wall time since): delta is pulled back at
+    once. If no ground truth lies in the
     search window, or no fit has succeeded for REFIT_AFTER_S while moving,
     delta is re-seeded from the newest samples and searched again over +-1 s:
     a stuck delta stamps every image at the wrong time and stops the VIO.
     """
 
     MAX_STEP_NS = 20_000_000
+    STEP_AGREE_NS = 10_000_000
+    FUTURE_SLACK_NS = 30_000_000
     REFIT_AFTER_S = 10.0
 
     def __init__(self, trajectory: Trajectory, logger):
@@ -203,6 +209,7 @@ class Clock:
         self.fits: collections.deque = collections.deque(maxlen=600)  # (game s, delta ns) of good fits
         self.walls: collections.deque = collections.deque(maxlen=200)  # (game s, wall - game ns) of frames
         self.anchor = None  # (delta, AirSim - wall, wall - game) at the last good fit
+        self.step_candidate = None  # delta of a large step seen once
         self.drift = 0.0  # d(delta)/d(game time), from self.fits
         self.lock = threading.Lock()
         self.stats = collections.Counter()
@@ -231,7 +238,18 @@ class Clock:
                     self.stats["wall_tracked"] += 1
                 else:
                     self.delta = self.fits[-1][1] + int(self.drift * (game_time - self.fits[-1][0]) * 1e9)
-            return int(game_time * 1e9) + self.delta
+            t = int(game_time * 1e9) + self.delta
+            if len(latest) > 3:
+                # A frame cannot be newer than AirSim's clock now: a stamp from
+                # the future makes the VIO wait for IMU data that never fits.
+                now = latest[0] + (time.time_ns() - latest[3])
+                if t > now + self.FUTURE_SLACK_NS:
+                    self.delta -= t - now
+                    if self.anchor is not None:
+                        self.anchor = (self.anchor[0] - (t - now), *self.anchor[1:])
+                    self.stats["future_capped"] += 1
+                    t = now
+            return t
 
     def _wall_offsets(self) -> tuple[float, float] | None:
         """(AirSim - wall, wall - game) [ns], medians over the last 2 s."""
@@ -250,7 +268,7 @@ class Clock:
         t = np.array([f[0] for f in self.fits])
         d = np.array([f[1] for f in self.fits], dtype=np.float64) * 1e-9
         rate = float(np.polyfit(t - t[0], d - d[0], 1)[0])
-        self.drift = max(-0.01, min(0.01, rate))  # at most 1 %
+        self.drift = max(-0.05, min(0.05, rate))  # at most 5 % (under load AirSim ran 1.2 % slow)
         self.stats["drift_ppm"] = self.drift * 1e6
 
     def _reseed(self, why: str) -> None:
@@ -309,8 +327,15 @@ class Clock:
         frac = max(-1.0, min(1.0, 0.5 * (c0 - c2) / denom)) if denom > 1e-12 else 0.0
         new_delta = int(deltas[i] + frac * 2_000_000)
         if self.fitted and abs(new_delta - self.delta) > self.MAX_STEP_NS:
-            self.stats["clamped"] += 1
-            new_delta = self.delta + int(math.copysign(self.MAX_STEP_NS, new_delta - self.delta))
+            if self.step_candidate is not None and abs(new_delta - self.step_candidate) < self.STEP_AGREE_NS:
+                self.stats["stepped"] += 1  # two fits in a row agree: the clocks did jump
+                self.step_candidate = None
+            else:
+                self.stats["clamped"] += 1
+                self.step_candidate = new_delta
+                new_delta = self.delta + int(math.copysign(self.MAX_STEP_NS, new_delta - self.delta))
+        else:
+            self.step_candidate = None
         self.delta = new_delta
         self.fitted = True
         self.last_fit_ok = time.monotonic()
@@ -599,7 +624,7 @@ def main() -> int:
                 delta = bridge.clock.delta
                 node.get_logger().info(
                     f"time alignment: {s['fit_ok']} fits (last rms {s['fit_rms_mm']:.1f} mm), {s['fit_bad']} rejected "
-                    f"(rms {s['fit_bad_rms'] * 1000:.0f} mm), {s['still']} while still, {s['clamped']} clamped, "
+                    f"(rms {s['fit_bad_rms'] * 1000:.0f} mm), {s['still']} while still, {s['clamped']} clamped, {s['stepped']} stepped, {s['future_capped']} capped to AirSim now, "
                     f"{s['no_ground_truth']} without ground truth, {s['few_frames']} with few frames, "
                     f"{s['reseeded']} re-seeded, {s['wall_tracked']} wall-tracked, {s['out_of_order']} out-of-order frames dropped; drift {bridge.clock.drift * 1e6:.0f} ppm; "
                     f"AirSim - game time {(delta or 0) / 1e9:.3f} s")
