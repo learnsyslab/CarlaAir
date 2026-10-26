@@ -6,9 +6,10 @@
 # PX4_ETC_DIR is the "etc" directory of a PX4 SITL build (the one passed as
 # the last argument to the px4 binary). OUTPUT_DIR becomes a symlinked copy
 # of it with these changes:
-# - px4-rc.simulator no longer switches to one EKF per IMU (EKF2_MULTI_IMU 3,
-#   SENS_IMU_MODE 0). That suits Gazebo's several IMUs; with AirSim's single
-#   IMU it leaves no selectable estimator. PX4's defaults (single EKF) remain.
+# - the simulator startup (px4-rc.simulator; px4-rc.mavlinksim from PX4 1.16)
+#   no longer switches to one EKF per IMU (EKF2_MULTI_IMU 3, SENS_IMU_MODE 0).
+#   That suits Gazebo's several IMUs; with AirSim's single IMU it leaves no
+#   selectable estimator. PX4's defaults (single EKF) remain.
 # - simulator_mavlink starts in the foreground, so the rest of the startup
 #   waits until AirSim is connected. AirSim stamps its sensor data with Unix
 #   time; PX4's lockstep clock jumps there on the first sample, and modules
@@ -32,24 +33,30 @@ px4_etc="$(cd -- "$1" && pwd)"
 output="$2"
 shift 2
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-simulator_rc="${px4_etc}/init.d-posix/px4-rc.simulator"
-[[ -f "${simulator_rc}" ]] || { echo "ERROR: not a PX4 SITL etc directory: ${px4_etc}" >&2; exit 2; }
+init_dir="${px4_etc}/init.d-posix"
+[[ -f "${init_dir}/px4-rc.simulator" ]] || { echo "ERROR: not a PX4 SITL etc directory: ${px4_etc}" >&2; exit 2; }
 
 rm -rf "${output}"
 mkdir -p "$(dirname -- "${output}")"
 cp -rs "${px4_etc}" "${output}"
 
-rm "${output}/init.d-posix/px4-rc.simulator"
-grep -vE '^[[:space:]]*param set-default (EKF2_MULTI_IMU 3|SENS_IMU_MODE 0)[[:space:]]*$' \
-  "${simulator_rc}" | sed -E 's/^([[:space:]]*simulator_mavlink start .*[^[:space:]])[[:space:]]*&[[:space:]]*$/\1/' \
-  > "${output}/init.d-posix/px4-rc.simulator"
-grep -qE '^[[:space:]]*simulator_mavlink start .*&[[:space:]]*$' "${output}/init.d-posix/px4-rc.simulator" && {
-  echo "ERROR: could not start simulator_mavlink in the foreground" >&2
-  exit 1
-}
-removed=$(( $(wc -l < "${simulator_rc}") - $(wc -l < "${output}/init.d-posix/px4-rc.simulator") ))
+# PX4 <= 1.15 (and forks of that time) start simulator_mavlink in
+# px4-rc.simulator; PX4 1.16 moved it to px4-rc.mavlinksim.
+removed=0
+for rc in px4-rc.simulator px4-rc.mavlinksim; do
+  [[ -f "${init_dir}/${rc}" ]] || continue
+  rm "${output}/init.d-posix/${rc}"
+  grep -vE '^[[:space:]]*param set-default (EKF2_MULTI_IMU 3|SENS_IMU_MODE 0)[[:space:]]*$' \
+    "${init_dir}/${rc}" | sed -E 's/^([[:space:]]*simulator_mavlink start .*[^[:space:]])[[:space:]]*&[[:space:]]*$/\1/' \
+    > "${output}/init.d-posix/${rc}"
+  grep -qE '^[[:space:]]*simulator_mavlink start .*&[[:space:]]*$' "${output}/init.d-posix/${rc}" && {
+    echo "ERROR: could not start simulator_mavlink in the foreground (${rc})" >&2
+    exit 1
+  }
+  removed=$(( removed + $(wc -l < "${init_dir}/${rc}") - $(wc -l < "${output}/init.d-posix/${rc}") ))
+done
 [[ "${removed}" == 2 ]] || {
-  echo "ERROR: expected to remove 2 multi-IMU lines from px4-rc.simulator, removed ${removed}" >&2
+  echo "ERROR: expected to remove 2 multi-IMU lines from the simulator startup, removed ${removed}" >&2
   exit 1
 }
 
