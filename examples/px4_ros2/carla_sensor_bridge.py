@@ -44,6 +44,7 @@ import yaml
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
+from std_msgs.msg import Int64
 from tf2_ros import StaticTransformBroadcaster
 
 from airsim_rpc import AirSimRpc
@@ -386,6 +387,10 @@ class CarlaSensorBridge:
         self.last_radar: dict[str, float] = {}
         self.rng = np.random.default_rng(0)
         self.counts = collections.Counter()
+        # The offset for other CARLA clients on the same drone (e.g. a C++
+        # camera component): AirSim time = game time + offset [ns], 20 Hz.
+        self.offset_pub = node.create_publisher(Int64, "carla_clock/offset_ns", 10)
+        node.create_timer(0.05, self._publish_offset)
         self.last_stamp: dict[str, int] = {}  # topic -> newest published image stamp [ns]
         self._publish_tf(config.get("body_frame", "base_link"))
 
@@ -486,6 +491,10 @@ class CarlaSensorBridge:
             self._lidar(header, payload)
         elif kind == "radar":
             self._radar(header, payload)
+
+    def _publish_offset(self) -> None:
+        if self.clock.delta is not None:
+            self.offset_pub.publish(Int64(data=int(self.clock.delta)))
 
     def _out(self, topic: str) -> dict:
         return next(o for o in self.specs[self.topic_sensor[topic]]["publish"] if o["topic"] == topic)
