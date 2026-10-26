@@ -76,6 +76,10 @@ Requires `python3-msgpack`, `python3-numpy` and `python3-yaml`.
   turn. Once locked, one fit moves the offset by at most 20 ms, and image
   stamps never go backwards. The bridge logs the fit statistics every 30 s
   ("time alignment: ...").
+  It publishes the offset as `<namespace>/carla_clock/offset_ns`
+  (`std_msgs/Int64`, AirSim time = game time + offset, 20 Hz) for other CARLA
+  clients on the same drone, e.g. a C++ camera component; the fit also runs on
+  the lidar frames, so it works with a config without cameras.
 - **QoS.** `carla_sensor_bridge.py` publishes images and point clouds best
   effort (ROS sensor-data QoS); subscribe with `qos_profile_sensor_data`. With
   a reliable writer, one slow reliable subscriber made `publish()` wait for its
