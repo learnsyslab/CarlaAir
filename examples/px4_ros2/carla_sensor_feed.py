@@ -129,7 +129,9 @@ def main() -> int:
             continue
         sensors.append((name, world.get_actor(result.actor_id)))
 
-    outbox: queue.Queue = queue.Queue(maxsize=200)
+    # About 1 s of messages: a bridge that falls behind loses frames instead of
+    # receiving them seconds late in a burst (200 held several seconds of images).
+    outbox: queue.Queue = queue.Queue(maxsize=60)
     for name, sensor in sensors:
         def callback(data, name=name):
             try:

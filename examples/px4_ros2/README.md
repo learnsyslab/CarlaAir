@@ -76,6 +76,13 @@ Requires `python3-msgpack`, `python3-numpy` and `python3-yaml`.
   turn. Once locked, one fit moves the offset by at most 20 ms, and image
   stamps never go backwards. The bridge logs the fit statistics every 30 s
   ("time alignment: ...").
+- **QoS.** `carla_sensor_bridge.py` publishes images and point clouds best
+  effort (ROS sensor-data QoS); subscribe with `qos_profile_sensor_data`. With
+  a reliable writer, one slow reliable subscriber made `publish()` wait for its
+  acknowledgements, and the bridge's single thread stalled every camera and
+  lidar stream for up to 1.8 s. `carla_sensor_feed.py` holds at most ~1 s of
+  messages: a bridge that falls behind loses frames rather than getting them
+  seconds late in a burst.
 - **CARLA radar velocity.** The radar derives its own velocity from the
   position change per frame; with a `sensor_tick` larger than a frame its
   Doppler velocities come out too large. Run it every frame.

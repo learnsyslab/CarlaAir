@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import rclpy
+from rclpy.qos import qos_profile_sensor_data
 import yaml
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import TransformStamped
@@ -362,15 +363,20 @@ class CarlaSensorBridge:
             m = s["mount"]
             self.mounts[name] = (np.array([m["x"], m["y"], -m["z"]]),
                                  rotation_ned(m.get("roll", 0.0), m.get("pitch", 0.0), m.get("yaw", 0.0)))
-        # Publishers
+        # Publishers. Images and clouds go out best effort (ROS sensor QoS):
+        # with a reliable writer, one slow reliable subscriber (the XR teleop
+        # node on the lidars) made publish() wait for its acks, and this
+        # single thread stalled every camera and lidar stream for up to 1.8 s.
+        # Subscribers must use best effort (qos_profile_sensor_data).
         self.image_pubs = {}
         for s in config["sensors"]:
             for out in s.get("publish", []):
                 if s["type"].startswith("sensor.camera"):
-                    self.image_pubs[out["topic"]] = (node.create_publisher(Image, out["topic"], 5),
+                    self.image_pubs[out["topic"]] = (node.create_publisher(Image, out["topic"], qos_profile_sensor_data),
                                                      node.create_publisher(CameraInfo, out["info_topic"], 5))
                 else:
-                    self.image_pubs[out["topic"]] = (node.create_publisher(PointCloud2, out["topic"], 5), None)
+                    self.image_pubs[out["topic"]] = (node.create_publisher(PointCloud2, out["topic"], qos_profile_sensor_data),
+                                                     None)
         self.camera_order = config.get("camera_order", [])
         self.topic_sensor = {out["topic"]: s["name"] for s in config["sensors"] for out in s.get("publish", [])}
         self.group = sorted({self.topic_sensor[t] for t in self.camera_order})
