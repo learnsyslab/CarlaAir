@@ -13,7 +13,8 @@ spawns the sensors, and streams every measurement as
 
     4-byte big-endian header length | JSON header | payload bytes
 
-with the header {"sensor", "frame", "timestamp" (CARLA game time),
+with the header {"sensor", "frame", "timestamp" (CARLA game time), "wall"
+(wall clock when CARLA delivered the data),
 "transform" (sensor world pose: x, y, z, roll, pitch, yaw in CARLA/Unreal
 units), "size", ...}. carla_sensor_bridge.py converts the game time into the
 AirSim clock and publishes on ROS 2. The sensors are destroyed on exit.
@@ -60,7 +61,7 @@ def pose(transform: carla.Transform) -> list[float]:
 
 
 def measurement(name: str, data) -> tuple[dict, bytes]:
-    header = {"sensor": name, "frame": data.frame, "timestamp": data.timestamp,
+    header = {"sensor": name, "frame": data.frame, "timestamp": data.timestamp, "wall": time.time(),
               "transform": pose(data.transform)}
     if isinstance(data, carla.Image):
         header.update(kind="image", width=data.width, height=data.height)

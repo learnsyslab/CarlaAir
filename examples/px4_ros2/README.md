@@ -69,6 +69,13 @@ Requires `python3-msgpack`, `python3-numpy` and `python3-yaml`.
   fits the offset with the rendered drone poses against AirSim's trajectory.
   AirSim's ground-truth position has a different origin than CARLA's and jumps
   when the vehicle first moves; the fit removes a constant translation.
+  The two clocks drift by ~0.15 % (~1.4 ms/s). The fit needs motion, so while
+  the drone hovers the bridge follows the drift against the wall clock (the
+  feed sends each frame's wall time); without that, a few minutes of hovering
+  left the image stamps 0.2-0.4 s off and the VIO lost tracking at the next
+  turn. Once locked, one fit moves the offset by at most 20 ms, and image
+  stamps never go backwards. The bridge logs the fit statistics every 30 s
+  ("time alignment: ...").
 - **CARLA radar velocity.** The radar derives its own velocity from the
   position change per frame; with a `sensor_tick` larger than a frame its
   Doppler velocities come out too large. Run it every frame.

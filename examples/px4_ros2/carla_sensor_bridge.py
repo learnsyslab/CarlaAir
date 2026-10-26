@@ -138,7 +138,7 @@ class Trajectory:
                     p = k["position"]
                     with self.lock:
                         self.samples.append((imu["time_stamp"], np.array([p["x_val"], p["y_val"], p["z_val"]]),
-                                             rotation_from_quaternion(imu["orientation"])))
+                                             rotation_from_quaternion(imu["orientation"]), time.time_ns()))
                 time.sleep(self.period)
 
     def window(self, t0: int, t1: int):
@@ -153,6 +153,15 @@ class Trajectory:
         with self.lock:
             return self.samples[-1] if self.samples else None
 
+    def airsim_minus_wall(self) -> float | None:
+        """Median of AirSim time - wall clock [ns] over the last 2 s of samples."""
+        with self.lock:
+            if not self.samples or len(self.samples[-1]) < 4:
+                return None
+            newest = self.samples[-1][3]
+            rows = [s[0] - s[3] for s in reversed(self.samples) if len(s) > 3 and s[3] > newest - 2_000_000_000]
+        return float(np.median(rows)) if len(rows) >= 10 else None
+
 
 class Clock:
     """Maps CARLA game time to AirSim time with the drone's rendered poses.
@@ -164,8 +173,24 @@ class Clock:
     sweep passes every heading twice). The two position frames have different
     origins (and AirSim's ground truth jumps when the vehicle first moves), so
     the fit removes the best constant translation for every candidate delta.
-    While the drone does not move, the last delta is kept.
+    The clocks drift (game time ran ~0.15 % fast: ~1.4 ms/s). While the drone
+    does not move (no fit possible), delta follows that drift: from the last
+    good fit on, by how AirSim time and game time each moved against the wall
+    clock (the feed sends the wall time of every frame; constant latencies
+    cancel), else by the drift rate fitted over the good fits of the last
+    minutes. A hover of a few minutes otherwise left the image stamps 0.2-0.4 s
+    off, and the VIO lost tracking at the next turn.
+
+    Robustness: once fitted, one fit moves delta by at most MAX_STEP_NS (the
+    clocks drift by milliseconds per minute; a degenerate fit during fast
+    flight once moved it by 0.45 s in a minute). If no ground truth lies in the
+    search window, or no fit has succeeded for REFIT_AFTER_S while moving,
+    delta is re-seeded from the newest samples and searched again over +-1 s:
+    a stuck delta stamps every image at the wrong time and stops the VIO.
     """
+
+    MAX_STEP_NS = 20_000_000
+    REFIT_AFTER_S = 10.0
 
     def __init__(self, trajectory: Trajectory, logger):
         self.trajectory = trajectory
@@ -174,14 +199,22 @@ class Clock:
         self.fitted = False
         self.history: collections.deque = collections.deque(maxlen=400)  # (game s, position, rotation)
         self.next_fit = 0.0
+        self.last_fit_ok = time.monotonic()
+        self.fits: collections.deque = collections.deque(maxlen=600)  # (game s, delta ns) of good fits
+        self.walls: collections.deque = collections.deque(maxlen=200)  # (game s, wall - game ns) of frames
+        self.anchor = None  # (delta, AirSim - wall, wall - game) at the last good fit
+        self.drift = 0.0  # d(delta)/d(game time), from self.fits
         self.lock = threading.Lock()
         self.stats = collections.Counter()
 
-    def airsim_time(self, game_time: float, p_body: np.ndarray, r_body: np.ndarray) -> int | None:
+    def airsim_time(self, game_time: float, p_body: np.ndarray, r_body: np.ndarray,
+                    wall: float | None = None) -> int | None:
         latest = self.trajectory.latest()
         if latest is None:
             return None
         with self.lock:
+            if wall is not None and (not self.walls or self.walls[-1][0] != game_time):
+                self.walls.append((game_time, wall * 1e9 - game_time * 1e9))
             if self.delta is None:
                 self.delta = latest[0] - int(game_time * 1e9)
             if not self.history or self.history[-1][0] != game_time:
@@ -189,12 +222,52 @@ class Clock:
             if time.monotonic() >= self.next_fit:
                 self.next_fit = time.monotonic() + 0.5
                 self._fit()
+            if self.fits and self.history[-1][0] - self.fits[-1][0] > 1.0:
+                # No fit for a while (hovering): follow the clock drift, measured
+                # against the wall clock since the last good fit if possible.
+                now = self._wall_offsets()
+                if self.anchor is not None and now is not None:
+                    self.delta = self.anchor[0] + int((now[0] - self.anchor[1]) + (now[1] - self.anchor[2]))
+                    self.stats["wall_tracked"] += 1
+                else:
+                    self.delta = self.fits[-1][1] + int(self.drift * (game_time - self.fits[-1][0]) * 1e9)
             return int(game_time * 1e9) + self.delta
+
+    def _wall_offsets(self) -> tuple[float, float] | None:
+        """(AirSim - wall, wall - game) [ns], medians over the last 2 s."""
+        airsim_wall = self.trajectory.airsim_minus_wall()
+        if airsim_wall is None or len(self.walls) < 10:
+            return None
+        newest = self.walls[-1][0]
+        return airsim_wall, float(np.median([w[1] for w in self.walls if w[0] > newest - 2.0]))
+
+    def _fit_drift(self) -> None:
+        """Clock drift rate from the good fits of the last 10 min (needs >= 60 s)."""
+        while self.fits and self.fits[-1][0] - self.fits[0][0] > 600.0:
+            self.fits.popleft()
+        if len(self.fits) < 20 or self.fits[-1][0] - self.fits[0][0] < 60.0:
+            return
+        t = np.array([f[0] for f in self.fits])
+        d = np.array([f[1] for f in self.fits], dtype=np.float64) * 1e-9
+        rate = float(np.polyfit(t - t[0], d - d[0], 1)[0])
+        self.drift = max(-0.01, min(0.01, rate))  # at most 1 %
+        self.stats["drift_ppm"] = self.drift * 1e6
+
+    def _reseed(self, why: str) -> None:
+        latest = self.trajectory.latest()
+        if latest is None:
+            return
+        self.delta = latest[0] - int(self.history[-1][0] * 1e9)
+        self.fitted = False  # the next fits search +-1 s
+        self.last_fit_ok = time.monotonic()
+        self.stats["reseeded"] += 1
+        self.logger.warning(f"time alignment re-seeded ({why}): AirSim - game time {self.delta / 1e9:.3f} s")
 
     def _fit(self) -> None:
         newest = self.history[-1][0]
         frames = [h for h in self.history if h[0] > newest - 2.0]
         if len(frames) < 10:
+            self.stats["few_frames"] += 1
             return
         g = np.array([f[0] for f in frames]) * 1e9
         c = np.array([f[1] for f in frames])  # (K, 3) CARLA-derived positions
@@ -202,6 +275,9 @@ class Clock:
         rows = self.trajectory.window(int(g[0]) + self.delta - span - 50_000_000,
                                       int(g[-1]) + self.delta + span + 50_000_000)
         if rows is None:
+            self.stats["no_ground_truth"] += 1
+            if time.monotonic() - self.last_fit_ok > 2.0:
+                self._reseed("no ground truth in the search window")
             return
         t, p, r = rows
         motion = (np.linalg.norm(c.max(axis=0) - c.min(axis=0))
@@ -225,12 +301,23 @@ class Clock:
         if rms > 0.05 or i in (0, len(deltas) - 1):
             self.stats["fit_bad"] += 1
             self.stats["fit_bad_rms"] = rms
+            if self.fitted and time.monotonic() - self.last_fit_ok > self.REFIT_AFTER_S:
+                self._reseed(f"no good fit for {self.REFIT_AFTER_S:.0f} s while moving")
             return
         c0, c1, c2 = total[i - 1], total[i], total[i + 1]
         denom = c0 - 2 * c1 + c2
         frac = max(-1.0, min(1.0, 0.5 * (c0 - c2) / denom)) if denom > 1e-12 else 0.0
-        self.delta = int(deltas[i] + frac * 2_000_000)
+        new_delta = int(deltas[i] + frac * 2_000_000)
+        if self.fitted and abs(new_delta - self.delta) > self.MAX_STEP_NS:
+            self.stats["clamped"] += 1
+            new_delta = self.delta + int(math.copysign(self.MAX_STEP_NS, new_delta - self.delta))
+        self.delta = new_delta
         self.fitted = True
+        self.last_fit_ok = time.monotonic()
+        self.fits.append((newest, self.delta))
+        self._fit_drift()
+        offsets = self._wall_offsets()
+        self.anchor = (self.delta, *offsets) if offsets is not None else None
         self.stats["fit_ok"] += 1
         self.stats["fit_rms_mm"] = rms * 1000.0
 
@@ -268,6 +355,7 @@ class CarlaSensorBridge:
         self.last_radar: dict[str, float] = {}
         self.rng = np.random.default_rng(0)
         self.counts = collections.Counter()
+        self.last_stamp: dict[str, int] = {}  # topic -> newest published image stamp [ns]
         self._publish_tf(config.get("body_frame", "base_link"))
 
     # --- static frames --------------------------------------------------------
@@ -341,7 +429,7 @@ class CarlaSensorBridge:
         t_mount, r_mount = self.mounts[header["sensor"]]
         r_body = r_sensor @ r_mount.T
         p_body = np.array([x, y, -z]) - r_body @ t_mount
-        return self.clock.airsim_time(header["timestamp"], p_body, r_body)
+        return self.clock.airsim_time(header["timestamp"], p_body, r_body, header.get("wall"))
 
     def _handle(self, header: dict, payload: bytes) -> None:
         kind = header["kind"]
@@ -372,6 +460,12 @@ class CarlaSensorBridge:
         return next(o for o in self.specs[self.topic_sensor[topic]]["publish"] if o["topic"] == topic)
 
     def _publish_image(self, topic: str, header: dict, payload: bytes, t: int) -> None:
+        # A stamp going backwards (delta re-seeded) would corrupt the VIO
+        # state: drop the frame.
+        if t <= self.last_stamp.get(topic, -1):
+            self.clock.stats["out_of_order"] += 1
+            return
+        self.last_stamp[topic] = t
         spec = self.specs[header["sensor"]]
         out = self._out(topic)
         w, h = header["width"], header["height"]
@@ -505,8 +599,10 @@ def main() -> int:
                 delta = bridge.clock.delta
                 node.get_logger().info(
                     f"time alignment: {s['fit_ok']} fits (last rms {s['fit_rms_mm']:.1f} mm), {s['fit_bad']} rejected "
-                    f"(rms {s['fit_bad_rms'] * 1000:.0f} mm), {s['still']} while still; AirSim - game time "
-                    f"{(delta or 0) / 1e9:.3f} s")
+                    f"(rms {s['fit_bad_rms'] * 1000:.0f} mm), {s['still']} while still, {s['clamped']} clamped, "
+                    f"{s['no_ground_truth']} without ground truth, {s['few_frames']} with few frames, "
+                    f"{s['reseeded']} re-seeded, {s['wall_tracked']} wall-tracked, {s['out_of_order']} out-of-order frames dropped; drift {bridge.clock.drift * 1e6:.0f} ppm; "
+                    f"AirSim - game time {(delta or 0) / 1e9:.3f} s")
                 bridge.counts.clear()
                 s.clear()
                 last_report = time.monotonic()
