@@ -18,6 +18,7 @@
 
 #include "GameFramework/Pawn.h"
 #include "Materials/MaterialParameterCollectionInstance.h"
+#include "HAL/IConsoleManager.h"
 
 #include <compiler/disable-ue4-macros.h>
 #include <carla/geom/BoundingBox.h>
@@ -363,7 +364,11 @@ private:
   void TickTimers(float DeltaSeconds)
   {
     ElapsedGameTime += DeltaSeconds;
-    SetVisualGameTime(VisualGameTime + DeltaSeconds);
+    static const auto *PauseTime = IConsoleManager::Get().FindTConsoleVariableDataFloat(TEXT("r.EnvironmentPauseTime"));
+    if (PauseTime == nullptr || PauseTime->GetValueOnGameThread() < 0.0f)
+    {
+      SetVisualGameTime(VisualGameTime + DeltaSeconds);
+    }
     #if defined(WITH_ROS2)
     auto ROS2 = carla::ros2::ROS2::GetInstance();
     if (ROS2->IsEnabled())
